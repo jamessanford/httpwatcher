@@ -17,6 +17,7 @@
 //   16 : Opaque string  { ptr, len }
 //   32 : User *Userinfo
 //   40 : Host string    { ptr uint64, len uint64 }
+//   56 : Path string    { ptr uint64, len uint64 }
 
 #define __TARGET_ARCH_x86
 
@@ -55,7 +56,7 @@ struct pt_regs {
 char LICENSE[] SEC("license") = "GPL";
 
 #define MAX_STR  64
-#define MSG_SIZE 160  /* "Method=<64> Host=<64> + separators, null-terminated" */
+#define MSG_SIZE 224  /* "Method=<64> Host=<64> Path=<64> + separators, null-terminated" */
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -94,13 +95,24 @@ int handle_uprobe(struct pt_regs *ctx)
 		host_len = MAX_STR - 1;
 	bpf_probe_read_user(host, host_len, (void *)host_ptr);
 
-	// Reserve a ring buffer slot and write "Method=<m> Host=<h>\0"
+	// Read URL.Path string header: ptr at offset 56, len at offset 64
+	__u64 path_ptr = 0;
+	__u64 path_len = 0;
+	bpf_probe_read_user(&path_ptr, sizeof(path_ptr), (void *)(url_ptr + 56));
+	bpf_probe_read_user(&path_len, sizeof(path_len), (void *)(url_ptr + 64));
+
+	char path[MAX_STR] = {};
+	if (path_len >= MAX_STR)
+		path_len = MAX_STR - 1;
+	bpf_probe_read_user(path, path_len, (void *)path_ptr);
+
+	// Reserve a ring buffer slot and write "Method=<m> Host=<h> Path=<p>\0"
 	char *msg = bpf_ringbuf_reserve(&events, MSG_SIZE, 0);
 	if (!msg)
 		return 0;
 
 	// BPF_SNPRINTF writes into the reserved slot directly.
-	BPF_SNPRINTF(msg, MSG_SIZE, "Method=%s Host=%s", method, host);
+	BPF_SNPRINTF(msg, MSG_SIZE, "Method=%s Host=%s Path=%s", method, host, path);
 
 	bpf_ringbuf_submit(msg, 0);
 	return 0;
