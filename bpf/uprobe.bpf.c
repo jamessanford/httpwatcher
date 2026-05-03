@@ -95,6 +95,7 @@ typedef struct {
 	__u64 url_path;
 	__u64 url_rawquery;
 	__u64 request_header;
+	__u64 swiss_tables; // 1 = Go 1.24+ Swiss tables, 0 = skip header parsing
 } off_table_t;
 
 struct http_event {
@@ -387,7 +388,7 @@ int handle_uprobe(struct pt_regs *ctx)
 	__u64 header_map = 0;
 	bpf_probe_read_user(&header_map, 8, (void *)(req + ot->request_header));
 
-	if (header_map) {
+	if (header_map && ot->swiss_tables) {
 		struct parse_hdr_ctx pctx = { .header_map = header_map };
 		bpf_loop(1, parse_header_cb, &pctx, 0);
 	}
