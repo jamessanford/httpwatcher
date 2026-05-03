@@ -118,6 +118,37 @@ struct str_scratch {
 	char query[MAX_STR];
 };
 
+// Context passed to slot_cb through bpf_loop.
+// nh is NOT stored here; slot_cb reads and writes ev->nheaders in the
+// event_scratch_map instead.  Keeping nh in the context would cause the
+// verifier to re-verify slot_cb for every distinct accumulated value of nh
+// (0, 1, 2, ..., MAX_HEADERS-1), exploding the state count.  Map value
+// loads are treated as opaque bounded scalars by the verifier, so a single
+// pass through slot_cb covers all possible nheaders values.
+struct slot_ctx {
+	__u64 group_base;
+	__u32 map_key;  // always 0; stored here to avoid a local stack var
+	__u32 _pad;
+};
+
+// group_cb needs only the groups array base; nh lives in event_scratch_map.
+struct group_ctx {
+	__u64 groups_data;
+};
+
+// dir_cb needs only the directory pointer; nh lives in event_scratch_map.
+struct dir_ctx {
+	__u64 dir_ptr;
+};
+
+// Context for parse_header_cb: header_map pointer.
+// parse_header_cb is invoked via bpf_loop(1, ...) so the verifier processes
+// all Swiss tables traversal with a clean register state, independent of
+// handle_uprobe's accumulated branch state from string-field reading.
+struct parse_hdr_ctx {
+	__u64 header_map;
+};
+
 // Keyed by PID (TGID); populated by Go before each uprobe is attached.
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -126,6 +157,7 @@ struct {
 	__type(value, off_table_t);
 } go_offsets_map SEC(".maps");
 
+// Per-CPU scratch for request-line strings.
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
@@ -133,10 +165,138 @@ struct {
 	__type(value, struct str_scratch);
 } str_scratch_map SEC(".maps");
 
+// Per-CPU scratch for the full event struct.  Used during header parsing so
+// that the ring buffer pointer never crosses a bpf_loop context boundary,
+// which would confuse the BPF verifier's pointer-type tracking.
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct http_event);
+} event_scratch_map SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 20); /* 1 MB */
 } events SEC(".maps");
+
+// slot_cb is called by bpf_loop once per slot index (0-7) within a single
+// Swiss tables group.  It reads the key/value pair at that slot and appends
+// it to the event scratch if the slot is occupied.
+static long slot_cb(__u32 si, void *data)
+{
+	struct slot_ctx *c = data;
+
+	struct http_event *ev = bpf_map_lookup_elem(&event_scratch_map, &c->map_key);
+	if (!ev)
+		return 1;
+
+	// Read nh from the map value so the verifier sees a bounded scalar,
+	// not a concrete accumulated stack value that forces re-verification.
+	__u64 nh = ev->nheaders;
+	if (nh >= MAX_HEADERS)
+		return 1;
+
+	__u8 ctrl = 0;
+	bpf_probe_read_user(&ctrl, 1, (void *)(c->group_base + si));
+	if (!CTRL_FULL(ctrl))
+		return 0;
+
+	__u64 sb = c->group_base + 8 + (__u64)si * SLOT_SIZE;
+
+	__u64 kptr = 0, klen = 0;
+	bpf_probe_read_user(&kptr, 8, (void *)sb);
+	bpf_probe_read_user(&klen, 8, (void *)(sb + 8));
+	if (!kptr || !klen || klen >= MAX_HDR_KEY)
+		return 0;
+
+	__u32 n  = (__u32)nh & (MAX_HEADERS - 1);
+	__u32 kl = klen & (MAX_HDR_KEY - 1);
+	bpf_probe_read_user(ev->keys[n], kl, (void *)kptr);
+	ev->keys[n][kl] = '\0';
+
+	__u64 vsp = 0, vsl = 0;
+	bpf_probe_read_user(&vsp, 8, (void *)(sb + ELEM_OFF));
+	bpf_probe_read_user(&vsl, 8, (void *)(sb + ELEM_OFF + 8));
+	ev->vals[n][0] = '\0';
+	if (vsp && vsl) {
+		__u64 vptr = 0, vlen = 0;
+		bpf_probe_read_user(&vptr, 8, (void *)vsp);
+		bpf_probe_read_user(&vlen, 8, (void *)(vsp + 8));
+		if (vptr && vlen && vlen < MAX_HDR_VAL) {
+			__u32 vl = vlen & (MAX_HDR_VAL - 1);
+			bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
+			ev->vals[n][vl] = '\0';
+		}
+	}
+	ev->nheaders = nh + 1;
+	return 0;
+}
+
+// group_cb is called once per group index within one table.
+// nh is not tracked here; slot_cb maintains it in event_scratch_map.
+static long group_cb(__u32 gi, void *data)
+{
+	struct group_ctx *gc = data;
+	struct slot_ctx sctx = {
+		.group_base = gc->groups_data + (__u64)gi * GROUP_SIZE,
+		.map_key    = 0,
+	};
+	bpf_loop(8, slot_cb, &sctx, 0);
+	return 0;
+}
+
+// dir_cb is called once per directory entry.  It reads the table pointer,
+// deduplicates by table.index, then sweeps its groups via group_cb.
+// nh is not tracked here; slot_cb maintains it in event_scratch_map.
+static long dir_cb(__u32 di, void *data)
+{
+	struct dir_ctx *dc = data;
+
+	__u64 tptr = 0;
+	bpf_probe_read_user(&tptr, 8, (void *)(dc->dir_ptr + (__u64)di * 8));
+	if (!tptr)
+		return 0;
+
+	__s64 tidx = -1;
+	bpf_probe_read_user(&tidx, 8, (void *)(tptr + TABLE_INDEX_OFF));
+	if (tidx != (__s64)di)
+		return 0;
+
+	__u64 gdata = 0, gmask = 0;
+	bpf_probe_read_user(&gdata, 8, (void *)(tptr + TABLE_GROUPS_DATA_OFF));
+	bpf_probe_read_user(&gmask, 8, (void *)(tptr + TABLE_GROUPS_MASK_OFF));
+	if (!gdata)
+		return 0;
+
+	__u32 n_groups = (gmask < 16) ? (__u32)(gmask + 1) : 16;
+	struct group_ctx gctx = { .groups_data = gdata };
+	bpf_loop(n_groups, group_cb, &gctx, 0);
+	return 0;
+}
+
+// parse_header_cb reads the Swiss tables header map and stores up to MAX_HEADERS
+// key/value pairs in event_scratch.  Called via bpf_loop(1, ...) from
+// handle_uprobe so the verifier sees a fresh register state here rather than
+// the accumulated branch state from the five string-field reads above.
+static long parse_header_cb(__u32 unused, void *data)
+{
+	struct parse_hdr_ctx *pc = data;
+
+	__u64 dir_ptr = 0, dir_len = 0;
+	bpf_probe_read_user(&dir_ptr, 8, (void *)(pc->header_map + MAP_DIRPTR_OFF));
+	bpf_probe_read_user(&dir_len, 8, (void *)(pc->header_map + MAP_DIRLEN_OFF));
+
+	if (dir_len == 0 && dir_ptr) {
+		struct slot_ctx sctx = { .group_base = dir_ptr, .map_key = 0 };
+		bpf_loop(8, slot_cb, &sctx, 0);
+	} else if (dir_ptr) {
+		__u32 n_dirs = (dir_len < 16) ? (__u32)dir_len : 16;
+		struct dir_ctx dctx = { .dir_ptr = dir_ptr };
+		bpf_loop(n_dirs, dir_cb, &dctx, 0);
+	}
+	return 0;
+}
 
 SEC("uprobe/net_http_client_do")
 int handle_uprobe(struct pt_regs *ctx)
@@ -149,6 +309,10 @@ int handle_uprobe(struct pt_regs *ctx)
 	__u32 zero = 0;
 	struct str_scratch *s = bpf_map_lookup_elem(&str_scratch_map, &zero);
 	if (!s)
+		return 0;
+
+	struct http_event *scratch = bpf_map_lookup_elem(&event_scratch_map, &zero);
+	if (!scratch)
 		return 0;
 
 	__u64 req = ctx->rbx;
@@ -208,132 +372,26 @@ int handle_uprobe(struct pt_regs *ctx)
 		s->query[0] = '\0';
 	}
 
-	struct http_event *ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
-	if (!ev)
-		return 0;
-
-	__builtin_memcpy(ev->method, s->method, MAX_STR);
-	__builtin_memcpy(ev->scheme, s->scheme, MAX_STR);
-	__builtin_memcpy(ev->host,   s->host,   MAX_STR);
-	__builtin_memcpy(ev->path,   s->path,   MAX_STR);
-	__builtin_memcpy(ev->query,  s->query,  MAX_STR);
-	ev->nheaders = 0;
+	// Stage the event in per-CPU scratch so slot_cb can reach it via map
+	// lookup without needing the ring buffer pointer in the bpf_loop context.
+	__builtin_memcpy(scratch->method, s->method, MAX_STR);
+	__builtin_memcpy(scratch->scheme, s->scheme, MAX_STR);
+	__builtin_memcpy(scratch->host,   s->host,   MAX_STR);
+	__builtin_memcpy(scratch->path,   s->path,   MAX_STR);
+	__builtin_memcpy(scratch->query,  s->query,  MAX_STR);
+	scratch->nheaders = 0;
 
 	// Read Request.Header (map[string][]string) via Go 1.24+ Swiss tables.
+	// parse_header_cb is wrapped in bpf_loop(1,...) so the verifier processes
+	// the Swiss tables traversal with a fresh register state.
 	__u64 header_map = 0;
 	bpf_probe_read_user(&header_map, 8, (void *)(req + ot->request_header));
 
-	__u32 nh = 0;
-	if (!header_map)
-		goto emit;
-
-	// TODO: Swiss tables map iteration exceeds the BPF 1M-instruction verifier
-	// limit with the current triple-nested loop structure.  Skip header parsing
-	// until we implement a tail-call or itermap-based approach.
-	goto emit;
-
-	__u64 dir_ptr = 0, dir_len = 0;
-	bpf_probe_read_user(&dir_ptr, 8, (void *)(header_map + MAP_DIRPTR_OFF));
-	bpf_probe_read_user(&dir_len, 8, (void *)(header_map + MAP_DIRLEN_OFF));
-
-	if (dir_len == 0 && dir_ptr) {
-		// Small map: dirPtr → single group (≤8 entries, no tombstones).
-		for (int si = 0; si < 8 && nh < MAX_HEADERS; si++) {
-			__u8 ctrl = 0;
-			bpf_probe_read_user(&ctrl, 1, (void *)(dir_ptr + si));
-			if (!CTRL_FULL(ctrl))
-				continue;
-
-			__u64 sb = dir_ptr + 8 + (__u64)si * SLOT_SIZE;
-			__u64 kptr = 0, klen = 0;
-			bpf_probe_read_user(&kptr, 8, (void *)sb);
-			bpf_probe_read_user(&klen, 8, (void *)(sb + 8));
-			if (!kptr || !klen || klen >= MAX_HDR_KEY)
-				continue;
-
-			__u32 n = nh & (MAX_HEADERS - 1);
-			__u32 kl = klen & (MAX_HDR_KEY - 1);
-			bpf_probe_read_user(ev->keys[n], kl, (void *)kptr);
-			ev->keys[n][kl] = '\0';
-
-			__u64 vsp = 0, vsl = 0;
-			bpf_probe_read_user(&vsp, 8, (void *)(sb + ELEM_OFF));
-			bpf_probe_read_user(&vsl, 8, (void *)(sb + ELEM_OFF + 8));
-			ev->vals[n][0] = '\0';
-			if (vsp && vsl) {
-				__u64 vptr = 0, vlen = 0;
-				bpf_probe_read_user(&vptr, 8, (void *)vsp);
-				bpf_probe_read_user(&vlen, 8, (void *)(vsp + 8));
-				if (vptr && vlen && vlen < MAX_HDR_VAL) {
-					__u32 vl = vlen & (MAX_HDR_VAL - 1);
-					bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
-					ev->vals[n][vl] = '\0';
-				}
-			}
-			nh++;
-		}
-	} else if (dir_ptr) {
-		// Large map: dirPtr → [dirLen]*table.
-		// Iterate up to 4 directory entries (globalDepth ≤ 2).
-		for (__u32 di = 0; di < 4 && di < dir_len && nh < MAX_HEADERS; di++) {
-			__u64 tptr = 0;
-			bpf_probe_read_user(&tptr, 8, (void *)(dir_ptr + di * 8));
-			if (!tptr)
-				continue;
-
-			// Skip duplicate directory entries: table.index is the
-			// canonical position; skip if this table lives elsewhere.
-			__s64 tidx = -1;
-			bpf_probe_read_user(&tidx, 8, (void *)(tptr + TABLE_INDEX_OFF));
-			if (tidx != (__s64)di)
-				continue;
-
-			__u64 gdata = 0, gmask = 0;
-			bpf_probe_read_user(&gdata, 8, (void *)(tptr + TABLE_GROUPS_DATA_OFF));
-			bpf_probe_read_user(&gmask, 8, (void *)(tptr + TABLE_GROUPS_MASK_OFF));
-
-			for (__u32 gi = 0; gi <= gmask && gi < 4 && nh < MAX_HEADERS; gi++) {
-				__u64 gbase = gdata + gi * GROUP_SIZE;
-				for (int si = 0; si < 8 && nh < MAX_HEADERS; si++) {
-					__u8 ctrl = 0;
-					bpf_probe_read_user(&ctrl, 1, (void *)(gbase + si));
-					if (!CTRL_FULL(ctrl))
-						continue;
-
-					__u64 sb = gbase + 8 + (__u64)si * SLOT_SIZE;
-					__u64 kptr = 0, klen = 0;
-					bpf_probe_read_user(&kptr, 8, (void *)sb);
-					bpf_probe_read_user(&klen, 8, (void *)(sb + 8));
-					if (!kptr || !klen || klen >= MAX_HDR_KEY)
-						continue;
-
-					__u32 n = nh & (MAX_HEADERS - 1);
-					__u32 kl = klen & (MAX_HDR_KEY - 1);
-					bpf_probe_read_user(ev->keys[n], kl, (void *)kptr);
-					ev->keys[n][kl] = '\0';
-
-					__u64 vsp = 0, vsl = 0;
-					bpf_probe_read_user(&vsp, 8, (void *)(sb + ELEM_OFF));
-					bpf_probe_read_user(&vsl, 8, (void *)(sb + ELEM_OFF + 8));
-					ev->vals[n][0] = '\0';
-					if (vsp && vsl) {
-						__u64 vptr = 0, vlen = 0;
-						bpf_probe_read_user(&vptr, 8, (void *)vsp);
-						bpf_probe_read_user(&vlen, 8, (void *)(vsp + 8));
-						if (vptr && vlen && vlen < MAX_HDR_VAL) {
-							__u32 vl = vlen & (MAX_HDR_VAL - 1);
-							bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
-							ev->vals[n][vl] = '\0';
-						}
-					}
-					nh++;
-				}
-			}
-		}
+	if (header_map) {
+		struct parse_hdr_ctx pctx = { .header_map = header_map };
+		bpf_loop(1, parse_header_cb, &pctx, 0);
 	}
 
-emit:
-	ev->nheaders = nh;
-	bpf_ringbuf_submit(ev, 0);
+	bpf_ringbuf_output(&events, scratch, sizeof(*scratch), 0);
 	return 0;
 }
