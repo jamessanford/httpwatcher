@@ -85,6 +85,36 @@ char LICENSE[] SEC("license") = "GPL";
 // Both ctrlEmpty (0x80) and ctrlDeleted (0xFE) have bit 7 set.
 #define CTRL_FULL(c) (!((c) & 0x80))
 
+// Go ≤1.23 hmap/bmap layout for map[string][]string (amd64).
+//
+// runtime.hmap:
+//   count      int            @ +0
+//   flags      uint8          @ +8
+//   B          uint8          @ +9   log2 of bucket count
+//   noverflow  uint16         @ +10
+//   hash0      uint32         @ +12
+//   buckets    unsafe.Pointer @ +16  → *bmap array
+//   oldbuckets unsafe.Pointer @ +24
+//
+// runtime.bmap (bucket), non-interleaved layout:
+//   tophash  [8]uint8         @ +0    (8 bytes)
+//   keys     [8]string        @ +8    (8×16 = 128 bytes)
+//   values   [8][]string      @ +136  (8×24 = 192 bytes)
+//   overflow *bmap            @ +328
+//
+// Slot i:  key ptr   @ +8   + i*16
+//          key len   @ +16  + i*16
+//          val ptr   @ +136 + i*24
+//          val len   @ +144 + i*24
+#define HMAP_B_OFF            9
+#define HMAP_BUCKETS_OFF      16
+#define HMAP_BUCKET_KEYS_OFF  8    /* first key in bucket */
+#define HMAP_BUCKET_VALS_OFF  136  /* first value in bucket (8 + 8*16) */
+#define HMAP_KEY_STRIDE       16   /* sizeof(string) */
+#define HMAP_VAL_STRIDE       24   /* sizeof([]string) */
+#define HMAP_BUCKET_SIZE      336  /* 8+128+192+8 */
+#define HMAP_MIN_TOPHASH      5    /* tophash < 5 means empty/evacuated */
+
 // Byte offsets for Go struct fields, populated by the loader before attaching.
 // Field order must match offTable in bpf_linux.go exactly.
 typedef struct {
@@ -147,6 +177,20 @@ struct dir_ctx {
 // all Swiss tables traversal with a clean register state, independent of
 // handle_uprobe's accumulated branch state from string-field reading.
 struct parse_hdr_ctx {
+	__u64 header_map;
+};
+
+// Contexts for the hmap (Go ≤1.23) parsing path, mirroring the Swiss tables
+// callback chain.  nh lives in event_scratch_map for the same reason.
+struct hmap_slot_ctx {
+	__u64 bucket_ptr;
+	__u32 map_key;
+	__u32 _pad;
+};
+struct hmap_bucket_ctx {
+	__u64 buckets_ptr;
+};
+struct parse_hmap_ctx {
 	__u64 header_map;
 };
 
@@ -276,6 +320,91 @@ static long dir_cb(__u32 di, void *data)
 	return 0;
 }
 
+// hmap_slot_cb reads one slot in an hmap bucket (Go ≤1.23 format).
+// Keys are laid out contiguously before values, unlike the interleaved
+// Swiss tables slot layout.
+static long hmap_slot_cb(__u32 si, void *data)
+{
+	struct hmap_slot_ctx *c = data;
+
+	struct http_event *ev = bpf_map_lookup_elem(&event_scratch_map, &c->map_key);
+	if (!ev)
+		return 1;
+
+	__u64 nh = ev->nheaders;
+	if (nh >= MAX_HEADERS)
+		return 1;
+
+	__u8 tophash = 0;
+	bpf_probe_read_user(&tophash, 1, (void *)(c->bucket_ptr + si));
+	if (tophash < HMAP_MIN_TOPHASH)
+		return 0;
+
+	__u64 kptr = 0, klen = 0;
+	bpf_probe_read_user(&kptr, 8, (void *)(c->bucket_ptr + HMAP_BUCKET_KEYS_OFF + (__u64)si * HMAP_KEY_STRIDE));
+	bpf_probe_read_user(&klen, 8, (void *)(c->bucket_ptr + HMAP_BUCKET_KEYS_OFF + (__u64)si * HMAP_KEY_STRIDE + 8));
+	if (!kptr || !klen || klen >= MAX_HDR_KEY)
+		return 0;
+
+	__u32 n  = (__u32)nh & (MAX_HEADERS - 1);
+	__u32 kl = klen & (MAX_HDR_KEY - 1);
+	bpf_probe_read_user(ev->keys[n], kl, (void *)kptr);
+	ev->keys[n][kl] = '\0';
+
+	__u64 vsp = 0, vsl = 0;
+	bpf_probe_read_user(&vsp, 8, (void *)(c->bucket_ptr + HMAP_BUCKET_VALS_OFF + (__u64)si * HMAP_VAL_STRIDE));
+	bpf_probe_read_user(&vsl, 8, (void *)(c->bucket_ptr + HMAP_BUCKET_VALS_OFF + (__u64)si * HMAP_VAL_STRIDE + 8));
+	ev->vals[n][0] = '\0';
+	if (vsp && vsl) {
+		__u64 vptr = 0, vlen = 0;
+		bpf_probe_read_user(&vptr, 8, (void *)vsp);
+		bpf_probe_read_user(&vlen, 8, (void *)(vsp + 8));
+		if (vptr && vlen && vlen < MAX_HDR_VAL) {
+			__u32 vl = vlen & (MAX_HDR_VAL - 1);
+			bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
+			ev->vals[n][vl] = '\0';
+		}
+	}
+	ev->nheaders = nh + 1;
+	return 0;
+}
+
+// hmap_bucket_cb sweeps the 8 slots of one bucket.
+static long hmap_bucket_cb(__u32 bi, void *data)
+{
+	struct hmap_bucket_ctx *bc = data;
+	struct hmap_slot_ctx sc = {
+		.bucket_ptr = bc->buckets_ptr + (__u64)bi * HMAP_BUCKET_SIZE,
+		.map_key    = 0,
+	};
+	bpf_loop(8, hmap_slot_cb, &sc, 0);
+	return 0;
+}
+
+// parse_hmap_cb parses a Go ≤1.23 hmap.  Called via bpf_loop(1,...) for the
+// same verifier-state isolation reason as parse_header_cb.
+static long parse_hmap_cb(__u32 unused, void *data)
+{
+	struct parse_hmap_ctx *pc = data;
+
+	__u8 B = 0;
+	bpf_probe_read_user(&B, 1, (void *)(pc->header_map + HMAP_B_OFF));
+
+	__u64 buckets = 0;
+	bpf_probe_read_user(&buckets, 8, (void *)(pc->header_map + HMAP_BUCKETS_OFF));
+	if (!buckets)
+		return 0;
+
+	// 1<<B buckets, capped so we stay well under the BPF instruction limit.
+	__u32 nbuckets = (__u32)1 << (B & 0xf);
+	if (nbuckets > 16)
+		nbuckets = 16;
+
+	struct hmap_bucket_ctx bc = { .buckets_ptr = buckets };
+	bpf_loop(nbuckets, hmap_bucket_cb, &bc, 0);
+	return 0;
+}
+
 // parse_header_cb reads the Swiss tables header map and stores up to MAX_HEADERS
 // key/value pairs in event_scratch.  Called via bpf_loop(1, ...) from
 // handle_uprobe so the verifier sees a fresh register state here rather than
@@ -388,9 +517,14 @@ int handle_uprobe(struct pt_regs *ctx)
 	__u64 header_map = 0;
 	bpf_probe_read_user(&header_map, 8, (void *)(req + ot->request_header));
 
-	if (header_map && ot->swiss_tables) {
-		struct parse_hdr_ctx pctx = { .header_map = header_map };
-		bpf_loop(1, parse_header_cb, &pctx, 0);
+	if (header_map) {
+		if (ot->swiss_tables) {
+			struct parse_hdr_ctx pctx = { .header_map = header_map };
+			bpf_loop(1, parse_header_cb, &pctx, 0);
+		} else {
+			struct parse_hmap_ctx pctx = { .header_map = header_map };
+			bpf_loop(1, parse_hmap_cb, &pctx, 0);
+		}
 	}
 
 	bpf_ringbuf_output(&events, scratch, sizeof(*scratch), 0);
