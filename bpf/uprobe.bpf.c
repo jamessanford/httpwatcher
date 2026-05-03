@@ -17,8 +17,6 @@
 //   16 : Opaque string  { ptr, len }
 //   32 : User *Userinfo
 //   40 : Host string    { ptr uint64, len uint64 }
-//
-// Output goes to /sys/kernel/debug/tracing/trace_pipe
 
 #define __TARGET_ARCH_x86
 
@@ -56,7 +54,13 @@ struct pt_regs {
 
 char LICENSE[] SEC("license") = "GPL";
 
-#define MAX_STR 64
+#define MAX_STR  64
+#define MSG_SIZE 160  /* "Method=<64> Host=<64> + separators, null-terminated" */
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 16); /* 64 KB */
+} events SEC(".maps");
 
 SEC("uprobe/net_http_client_do")
 int handle_uprobe(struct pt_regs *ctx)
@@ -90,9 +94,14 @@ int handle_uprobe(struct pt_regs *ctx)
 		host_len = MAX_STR - 1;
 	bpf_probe_read_user(host, host_len, (void *)host_ptr);
 
-	// bpf_printk supports at most 3 args (format + 2), so split the output.
-	bpf_printk("gover uprobe: Method=%s", method);
-	bpf_printk("gover uprobe: Host=%s", host);
+	// Reserve a ring buffer slot and write "Method=<m> Host=<h>\0"
+	char *msg = bpf_ringbuf_reserve(&events, MSG_SIZE, 0);
+	if (!msg)
+		return 0;
 
+	// BPF_SNPRINTF writes into the reserved slot directly.
+	BPF_SNPRINTF(msg, MSG_SIZE, "Method=%s Host=%s", method, host);
+
+	bpf_ringbuf_submit(msg, 0);
 	return 0;
 }
