@@ -474,9 +474,9 @@ int handle_uprobe(struct pt_regs *ctx)
 	__builtin_memcpy(scratch->query,  s->query,  MAX_STR);
 	scratch->nheaders = 0;
 
-	// Read Request.Header (map[string][]string) via Go 1.24+ Swiss tables.
-	// parse_header_cb is wrapped in bpf_loop(1,...) so the verifier processes
-	// the Swiss tables traversal with a fresh register state.
+	// Read Request.Header (map[string][]string).  Each parser is wrapped in
+	// bpf_loop(1,...) so the verifier sees a fresh register state, independent
+	// of the accumulated branch state from the string-field reads above.
 	__u64 header_map = 0;
 	bpf_probe_read_user(&header_map, 8, (void *)(req + ot->request_header));
 
