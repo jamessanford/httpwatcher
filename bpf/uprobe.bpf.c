@@ -123,7 +123,7 @@ typedef struct {
 	__u64 url_path;
 	__u64 url_rawquery;
 	__u64 request_header;
-	__u64 swiss_tables; // 1 = Go 1.24+ Swiss tables, 0 = skip header parsing
+	__u64 swiss_tables; // 1 = Go 1.24+ Swiss tables, 0 = Go ≤1.23 hmap
 } off_table_t;
 
 struct http_event {
