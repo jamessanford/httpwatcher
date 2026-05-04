@@ -57,8 +57,9 @@ char LICENSE[] SEC("license") = "GPL";
 #define CTRL_FULL(c) (!((c) & 0x80))
 
 // read_gostr reads a Go string (ptr+len at addr) into buf[0..max-1] and
-// null-terminates it.  Returns 0 on success, -1 if the string is absent or
-// too long.  max must be a power of two so the length mask is exact.
+// null-terminates it.  Returns 0 on success, -1 if the string is absent.
+// Strings longer than max-1 bytes are silently truncated.
+// max must be a power of two so the length mask is exact.
 static __always_inline int read_gostr(void *addr, char *buf, __u32 max)
 {
 	__u64 ptr = 0, len = 0;
