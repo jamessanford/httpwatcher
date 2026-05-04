@@ -85,6 +85,23 @@ char LICENSE[] SEC("license") = "GPL";
 // Both ctrlEmpty (0x80) and ctrlDeleted (0xFE) have bit 7 set.
 #define CTRL_FULL(c) (!((c) & 0x80))
 
+// read_gostr reads a Go string (ptr+len at addr) into buf[0..max-1] and
+// null-terminates it.  Returns 0 on success, -1 if the string is absent or
+// too long.  max must be a power of two so the length mask is exact.
+static __always_inline int read_gostr(void *addr, char *buf, __u32 max)
+{
+	__u64 ptr = 0, len = 0;
+	bpf_probe_read_user(&ptr, 8, addr);
+	bpf_probe_read_user(&len, 8, addr + 8);
+	if (!ptr || !len || len >= max) {
+		buf[0] = '\0';
+		return -1;
+	}
+	bpf_probe_read_user(buf, len & (max - 1), (void *)ptr);
+	buf[len & (max - 1)] = '\0';
+	return 0;
+}
+
 // Go ≤1.23 hmap/bmap layout for map[string][]string (amd64).
 //
 // runtime.hmap:
@@ -447,60 +464,15 @@ int handle_uprobe(struct pt_regs *ctx)
 
 	__u64 req = ctx->rbx;
 
-	// Read request-line string fields into per-CPU scratch buffers.
-	// Explicit null-termination because bpf_probe_read_user doesn't add it.
-	__u64 method_ptr = 0, method_len = 0;
-	bpf_probe_read_user(&method_ptr, 8, (void *)(req + ot->request_method));
-	bpf_probe_read_user(&method_len, 8, (void *)(req + ot->request_method + 8));
-	if (method_ptr && method_len < MAX_STR) {
-		bpf_probe_read_user(s->method, method_len, (void *)method_ptr);
-		s->method[method_len & (MAX_STR - 1)] = '\0';
-	} else {
-		s->method[0] = '\0';
-	}
+	read_gostr((void *)(req + ot->request_method), s->method, MAX_STR);
 
 	__u64 url_ptr = 0;
 	bpf_probe_read_user(&url_ptr, 8, (void *)(req + ot->request_url));
 
-	__u64 scheme_ptr = 0, scheme_len = 0;
-	bpf_probe_read_user(&scheme_ptr, 8, (void *)(url_ptr + ot->url_scheme));
-	bpf_probe_read_user(&scheme_len, 8, (void *)(url_ptr + ot->url_scheme + 8));
-	if (scheme_ptr && scheme_len < MAX_STR) {
-		bpf_probe_read_user(s->scheme, scheme_len, (void *)scheme_ptr);
-		s->scheme[scheme_len & (MAX_STR - 1)] = '\0';
-	} else {
-		s->scheme[0] = '\0';
-	}
-
-	__u64 host_ptr = 0, host_len = 0;
-	bpf_probe_read_user(&host_ptr, 8, (void *)(url_ptr + ot->url_host));
-	bpf_probe_read_user(&host_len, 8, (void *)(url_ptr + ot->url_host + 8));
-	if (host_ptr && host_len < MAX_STR) {
-		bpf_probe_read_user(s->host, host_len, (void *)host_ptr);
-		s->host[host_len & (MAX_STR - 1)] = '\0';
-	} else {
-		s->host[0] = '\0';
-	}
-
-	__u64 path_ptr = 0, path_len = 0;
-	bpf_probe_read_user(&path_ptr, 8, (void *)(url_ptr + ot->url_path));
-	bpf_probe_read_user(&path_len, 8, (void *)(url_ptr + ot->url_path + 8));
-	if (path_ptr && path_len < MAX_STR) {
-		bpf_probe_read_user(s->path, path_len, (void *)path_ptr);
-		s->path[path_len & (MAX_STR - 1)] = '\0';
-	} else {
-		s->path[0] = '\0';
-	}
-
-	__u64 query_ptr = 0, query_len = 0;
-	bpf_probe_read_user(&query_ptr, 8, (void *)(url_ptr + ot->url_rawquery));
-	bpf_probe_read_user(&query_len, 8, (void *)(url_ptr + ot->url_rawquery + 8));
-	if (query_ptr && query_len < MAX_STR) {
-		bpf_probe_read_user(s->query, query_len, (void *)query_ptr);
-		s->query[query_len & (MAX_STR - 1)] = '\0';
-	} else {
-		s->query[0] = '\0';
-	}
+	read_gostr((void *)(url_ptr + ot->url_scheme), s->scheme, MAX_STR);
+	read_gostr((void *)(url_ptr + ot->url_host),   s->host,   MAX_STR);
+	read_gostr((void *)(url_ptr + ot->url_path),   s->path,   MAX_STR);
+	read_gostr((void *)(url_ptr + ot->url_rawquery), s->query, MAX_STR);
 
 	// Stage the event in per-CPU scratch so slot_cb can reach it via map
 	// lookup without needing the ring buffer pointer in the bpf_loop context.
