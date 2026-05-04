@@ -8,39 +8,10 @@
 //     AX = receiver *Client  (ignored here)
 //     BX = req *Request
 
-#define __TARGET_ARCH_x86
-
-#include <linux/bpf.h>
-
-// Define x86_64 pt_regs before libbpf headers forward-declare it as an
-// incomplete type.  Without vmlinux.h (CO-RE), we must supply the layout
-// ourselves so that ctx->rbx compiles.
-struct pt_regs {
-	unsigned long r15;
-	unsigned long r14;
-	unsigned long r13;
-	unsigned long r12;
-	unsigned long rbp;
-	unsigned long rbx;   /* Go register ABI: BX = first integer arg after AX */
-	unsigned long r11;
-	unsigned long r10;
-	unsigned long r9;
-	unsigned long r8;
-	unsigned long rax;   /* Go register ABI: AX = receiver (for methods) */
-	unsigned long rcx;
-	unsigned long rdx;
-	unsigned long rsi;
-	unsigned long rdi;
-	unsigned long orig_rax;
-	unsigned long rip;
-	unsigned long cs;
-	unsigned long eflags;
-	unsigned long rsp;
-	unsigned long ss;
-};
-
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -97,8 +68,9 @@ static __always_inline int read_gostr(void *addr, char *buf, __u32 max)
 		buf[0] = '\0';
 		return -1;
 	}
-	bpf_probe_read_user(buf, len & (max - 1), (void *)ptr);
-	buf[len & (max - 1)] = '\0';
+	__u32 l = (__u32)len;  /* bounded: len < max, which fits in u32 */
+	bpf_probe_read_user(buf, l, (void *)ptr);
+	buf[l] = '\0';
 	return 0;
 }
 
@@ -462,7 +434,7 @@ int handle_uprobe(struct pt_regs *ctx)
 	if (!scratch)
 		return 0;
 
-	__u64 req = ctx->rbx;
+	__u64 req = BPF_CORE_READ(ctx, bx);
 
 	read_gostr((void *)(req + ot->request_method), s->method, MAX_STR);
 
