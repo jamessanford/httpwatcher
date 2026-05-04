@@ -137,16 +137,6 @@ struct http_event {
 	char  vals[MAX_HEADERS][MAX_HDR_VAL];
 };
 
-// Per-CPU scratch for request-line strings.  The BPF stack is only 512 bytes,
-// so the five 64-byte buffers live here instead.
-struct str_scratch {
-	char method[MAX_STR];
-	char scheme[MAX_STR];
-	char host[MAX_STR];
-	char path[MAX_STR];
-	char query[MAX_STR];
-};
-
 // Context passed to slot_cb through bpf_loop.
 // nh is NOT stored here; slot_cb reads and writes ev->nheaders in the
 // event_scratch_map instead.  Keeping nh in the context would cause the
@@ -199,14 +189,6 @@ struct {
 	__type(key, __u32);
 	__type(value, off_table_t);
 } go_offsets_map SEC(".maps");
-
-// Per-CPU scratch for request-line strings.
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, struct str_scratch);
-} str_scratch_map SEC(".maps");
 
 // Per-CPU scratch for the full event struct.  Used during header parsing so
 // that the ring buffer pointer never crosses a bpf_loop context boundary,
@@ -443,10 +425,6 @@ int handle_uprobe(struct pt_regs *ctx)
 		return 0;
 
 	__u32 zero = 0;
-	struct str_scratch *s = bpf_map_lookup_elem(&str_scratch_map, &zero);
-	if (!s)
-		return 0;
-
 	struct http_event *scratch = bpf_map_lookup_elem(&event_scratch_map, &zero);
 	if (!scratch)
 		return 0;
@@ -455,23 +433,15 @@ int handle_uprobe(struct pt_regs *ctx)
 	if (!req)
 		return 0;
 
-	read_gostr((void *)(req + ot->request_method), s->method, MAX_STR);
+	read_gostr((void *)(req + ot->request_method), scratch->method, MAX_STR);
 
 	__u64 url_ptr = 0;
 	bpf_probe_read_user(&url_ptr, 8, (void *)(req + ot->request_url));
 
-	read_gostr((void *)(url_ptr + ot->url_scheme), s->scheme, MAX_STR);
-	read_gostr((void *)(url_ptr + ot->url_host),   s->host,   MAX_STR);
-	read_gostr((void *)(url_ptr + ot->url_path),   s->path,   MAX_STR);
-	read_gostr((void *)(url_ptr + ot->url_rawquery), s->query, MAX_STR);
-
-	// Stage the event in per-CPU scratch so slot_cb can reach it via map
-	// lookup without needing the ring buffer pointer in the bpf_loop context.
-	__builtin_memcpy(scratch->method, s->method, MAX_STR);
-	__builtin_memcpy(scratch->scheme, s->scheme, MAX_STR);
-	__builtin_memcpy(scratch->host,   s->host,   MAX_STR);
-	__builtin_memcpy(scratch->path,   s->path,   MAX_STR);
-	__builtin_memcpy(scratch->query,  s->query,  MAX_STR);
+	read_gostr((void *)(url_ptr + ot->url_scheme), scratch->scheme, MAX_STR);
+	read_gostr((void *)(url_ptr + ot->url_host),   scratch->host,   MAX_STR);
+	read_gostr((void *)(url_ptr + ot->url_path),   scratch->path,   MAX_STR);
+	read_gostr((void *)(url_ptr + ot->url_rawquery), scratch->query, MAX_STR);
 	scratch->nheaders = 0;
 
 	// Read Request.Header (map[string][]string).  Each parser is wrapped in
