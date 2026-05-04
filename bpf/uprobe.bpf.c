@@ -64,11 +64,19 @@ static __always_inline int read_gostr(void *addr, char *buf, __u32 max)
 	__u64 ptr = 0, len = 0;
 	bpf_probe_read_user(&ptr, 8, addr);
 	bpf_probe_read_user(&len, 8, addr + 8);
-	if (!ptr || !len || len >= max) {
+	if (!ptr || !len) {
 		buf[0] = '\0';
 		return -1;
 	}
-	__u32 l = (__u32)len;  /* bounded: len < max, which fits in u32 */
+	// Mask before any bounds check: the compiler must emit the AND instruction
+	// so the BPF verifier on older kernels sees a bounded register.  If we
+	// checked len >= max first, the compiler would prove the AND is a no-op
+	// and optimize it away, leaving an unbounded R2 in the bytecode.
+	__u32 l = (__u32)len & (max - 1);
+	if (!l) {
+		buf[0] = '\0';
+		return -1;
+	}
 	bpf_probe_read_user(buf, l, (void *)ptr);
 	buf[l] = '\0';
 	return 0;
@@ -241,11 +249,13 @@ static long slot_cb(__u32 si, void *data)
 	__u64 kptr = 0, klen = 0;
 	bpf_probe_read_user(&kptr, 8, (void *)sb);
 	bpf_probe_read_user(&klen, 8, (void *)(sb + 8));
-	if (!kptr || !klen || klen >= MAX_HDR_KEY)
+	if (!kptr || !klen)
 		return 0;
 
 	__u32 n  = (__u32)nh & (MAX_HEADERS - 1);
-	__u32 kl = klen & (MAX_HDR_KEY - 1);
+	__u32 kl = (__u32)klen & (MAX_HDR_KEY - 1);  // mask before check; see read_gostr
+	if (!kl)
+		return 0;
 	bpf_probe_read_user(ev->keys[n], kl, (void *)kptr);
 	ev->keys[n][kl] = '\0';
 
@@ -257,10 +267,12 @@ static long slot_cb(__u32 si, void *data)
 		__u64 vptr = 0, vlen = 0;
 		bpf_probe_read_user(&vptr, 8, (void *)vsp);
 		bpf_probe_read_user(&vlen, 8, (void *)(vsp + 8));
-		if (vptr && vlen && vlen < MAX_HDR_VAL) {
-			__u32 vl = vlen & (MAX_HDR_VAL - 1);
-			bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
-			ev->vals[n][vl] = '\0';
+		if (vptr && vlen) {
+			__u32 vl = (__u32)vlen & (MAX_HDR_VAL - 1);  // mask before check
+			if (vl) {
+				bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
+				ev->vals[n][vl] = '\0';
+			}
 		}
 	}
 	ev->nheaders = nh + 1;
@@ -332,11 +344,13 @@ static long hmap_slot_cb(__u32 si, void *data)
 	__u64 kptr = 0, klen = 0;
 	bpf_probe_read_user(&kptr, 8, (void *)(c->bucket_ptr + HMAP_BUCKET_KEYS_OFF + (__u64)si * HMAP_KEY_STRIDE));
 	bpf_probe_read_user(&klen, 8, (void *)(c->bucket_ptr + HMAP_BUCKET_KEYS_OFF + (__u64)si * HMAP_KEY_STRIDE + 8));
-	if (!kptr || !klen || klen >= MAX_HDR_KEY)
+	if (!kptr || !klen)
 		return 0;
 
 	__u32 n  = (__u32)nh & (MAX_HEADERS - 1);
-	__u32 kl = klen & (MAX_HDR_KEY - 1);
+	__u32 kl = (__u32)klen & (MAX_HDR_KEY - 1);  // mask before check; see read_gostr
+	if (!kl)
+		return 0;
 	bpf_probe_read_user(ev->keys[n], kl, (void *)kptr);
 	ev->keys[n][kl] = '\0';
 
@@ -348,10 +362,12 @@ static long hmap_slot_cb(__u32 si, void *data)
 		__u64 vptr = 0, vlen = 0;
 		bpf_probe_read_user(&vptr, 8, (void *)vsp);
 		bpf_probe_read_user(&vlen, 8, (void *)(vsp + 8));
-		if (vptr && vlen && vlen < MAX_HDR_VAL) {
-			__u32 vl = vlen & (MAX_HDR_VAL - 1);
-			bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
-			ev->vals[n][vl] = '\0';
+		if (vptr && vlen) {
+			__u32 vl = (__u32)vlen & (MAX_HDR_VAL - 1);  // mask before check
+			if (vl) {
+				bpf_probe_read_user(ev->vals[n], vl, (void *)vptr);
+				ev->vals[n][vl] = '\0';
+			}
 		}
 	}
 	ev->nheaders = nh + 1;
