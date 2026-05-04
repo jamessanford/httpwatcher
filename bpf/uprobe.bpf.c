@@ -15,7 +15,7 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-#define MAX_STR      64
+#define MAX_STR      64   /* must be power of 2 */
 #define MAX_HEADERS  16   /* must be power of 2 */
 #define MAX_HDR_KEY  64   /* must be power of 2 */
 #define MAX_HDR_VAL  128  /* must be power of 2 */
