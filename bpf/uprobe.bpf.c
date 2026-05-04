@@ -435,6 +435,8 @@ int handle_uprobe(struct pt_regs *ctx)
 		return 0;
 
 	__u64 req = BPF_CORE_READ(ctx, bx);
+	if (!req)
+		return 0;
 
 	read_gostr((void *)(req + ot->request_method), s->method, MAX_STR);
 
