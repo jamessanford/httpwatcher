@@ -133,6 +133,7 @@ struct http_event {
 	char  path[MAX_STR];
 	char  query[MAX_STR];
 	__u64 nheaders;
+	__u64 pid;
 	char  keys[MAX_HEADERS][MAX_HDR_KEY];
 	char  vals[MAX_HEADERS][MAX_HDR_VAL];
 };
@@ -443,6 +444,7 @@ int handle_uprobe(struct pt_regs *ctx)
 	read_gostr((void *)(url_ptr + ot->url_path),   scratch->path,   MAX_STR);
 	read_gostr((void *)(url_ptr + ot->url_rawquery), scratch->query, MAX_STR);
 	scratch->nheaders = 0;
+	scratch->pid = pid;
 
 	// Read Request.Header (map[string][]string).  Each parser is wrapped in
 	// bpf_loop(1,...) so the verifier sees a fresh register state, independent
