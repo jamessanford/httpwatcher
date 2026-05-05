@@ -72,16 +72,3 @@ Flags:
       --verbose   Include build settings in JSON
   -h, --help      help for httpebpf
 ```
-
-## Build
-
-```bash
-make generate  # compile BPF and regenerate Go bindings (requires clang + bpftool)
-make build     # build the example command binary
-```
-
-For the BPF component, see [bpf/README.md](bpf/README.md) for toolchain setup and build instructions.
-
-## How it works
-
-`Init` loads an eBPF program compiled from `bpf/uprobe.bpf.c` (embedded in the binary via bpf2go). `Attach` resolves struct field offsets from the target binary's DWARF info, writes them into a BPF map, and installs a uprobe on `net/http.(*Client).do`. The BPF program reads the HTTP request fields from Go's register-based ABI and sends them through a ring buffer.
