@@ -1,6 +1,4 @@
-# go-httpsnoop
-
-`go-httpsnoop` is a Go library that traces outbound HTTP requests made by running Go processes. It attaches Linux uprobes to `net/http.(*Client).do` using eBPF.  It captures a subset of the http.Request: method, URL, and header map.
+`httpsnoop` is a Go library to trace outbound HTTP requests of running Go processes. It attaches Linux eBPF uprobes to `net/http.(*Client).do`.  It captures a subset of the http.Request.
 
 This library and eBPF code was written by Claude Code and Claude Sonnet 4.6.
 
@@ -38,13 +36,19 @@ for ev := range snoop.Events() {
 
 ## Example command
 
-`example/cmd/httpsnoop` is a CLI that wraps the library. It can inspect Go binaries and running processes, and attach uprobes to trace their HTTP traffic.
+`example/cmd/httpsnoop` is a sample CLI that wraps the library.
 
 ```bash
 go build -o httpsnoop ./example/cmd/httpsnoop
+
+# You may also install it:
+# go install github.com/jamessanford/httpsnoop/example/cmd/httpsnoop@latest
 ```
 
 ```bash
+# Find running Go processes
+sudo ./httpsnoop
+
 # Scan running Go processes and trace their HTTP requests
 sudo ./httpsnoop --bpf
 
@@ -75,8 +79,8 @@ make generate  # compile BPF and regenerate Go bindings (requires clang + bpftoo
 make build     # build the example command binary
 ```
 
-For the BPF component, see S[bpf/README.md](bpf/README.md) for toolchain setup and build instructions.
+For the BPF component, see [bpf/README.md](bpf/README.md) for toolchain setup and build instructions.
 
 ## How it works
 
-`Init` loads an eBPF program compiled from `bpf/uprobe.bpf.c` (embedded in the binary). `Attach` resolves struct field offsets from the target binary's DWARF info, writes them into a BPF map, and installs a uprobe on `net/http.(*Client).do`. The BPF program reads the HTTP request fields from Go's register-based ABI and sends them through a ring buffer.
+`Init` loads an eBPF program compiled from `bpf/uprobe.bpf.c` (embedded in the binary via bpf2go). `Attach` resolves struct field offsets from the target binary's DWARF info, writes them into a BPF map, and installs a uprobe on `net/http.(*Client).do`. The BPF program reads the HTTP request fields from Go's register-based ABI and sends them through a ring buffer.
