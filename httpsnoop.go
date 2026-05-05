@@ -38,10 +38,10 @@ import (
 
 // HTTPEvent is an outbound HTTP request captured from an instrumented process.
 type HTTPEvent struct {
-	PID     int
-	Method  string
-	URL     string
-	Headers map[string]string
+	PID     int               // PID of the process that issued the request
+	Method  string            // HTTP method (e.g. "GET", "POST")
+	URL     string            // Reconstructed URL; each component truncated to 64 bytes
+	Headers map[string]string // Request headers; at most 16 entries, keys ≤64 bytes, values ≤512 bytes
 }
 
 // Snooper manages uprobe-based HTTP request interception for multiple processes.
