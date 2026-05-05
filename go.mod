@@ -1,4 +1,4 @@
-module github.com/jamessanford/httpebpf
+module github.com/jamessanford/httpwatcher
 
 go 1.25.4
 

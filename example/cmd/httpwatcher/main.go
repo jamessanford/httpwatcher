@@ -14,7 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/jamessanford/httpebpf"
+	"github.com/jamessanford/httpwatcher"
 	"github.com/spf13/cobra"
 )
 
@@ -138,7 +138,7 @@ func run(flags configFlags, args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 
-		snoop, err := httpebpf.Init(ctx)
+		snoop, err := httpwatcher.Init(ctx)
 		if err != nil {
 			return err
 		}
@@ -196,7 +196,7 @@ func main() {
 	flags := configFlags{}
 
 	root := &cobra.Command{
-		Use:   "httpebpf [flags] [pid...]",
+		Use:   "httpwatcher [flags] [pid...]",
 		Short: "Trace HTTP outgoing requests of running Go processes",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true

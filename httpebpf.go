@@ -1,4 +1,4 @@
-// Package httpebpf traces outbound HTTP requests made by Go processes.
+// Package httpwatcher traces outbound HTTP requests made by Go processes.
 // It attaches Linux uprobes to net/http.(*Client).do using eBPF.
 // The events returned are a subset of the original http.Request,
 // with truncated strings and headers.
@@ -7,7 +7,7 @@
 //
 //	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 //	defer stop()
-//	snoop, err := httpebpf.Init(ctx)
+//	snoop, err := httpwatcher.Init(ctx)
 //	if err != nil { ... }
 //	defer snoop.Close()
 //	if err := snoop.Attach(pid); err != nil { ... }
@@ -17,7 +17,7 @@
 //	           fmt.Printf("  %s: %s\n", k, v)
 //	       }
 //	}
-package httpebpf
+package httpwatcher
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
 
-	"github.com/jamessanford/httpebpf/bpf"
+	"github.com/jamessanford/httpwatcher/bpf"
 )
 
 // HTTPEvent is an outbound HTTP request captured from an instrumented process.

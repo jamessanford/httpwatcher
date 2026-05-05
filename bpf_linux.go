@@ -1,6 +1,6 @@
 //go:build linux
 
-package httpebpf
+package httpwatcher
 
 import (
 	"structs"

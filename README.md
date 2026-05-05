@@ -1,16 +1,16 @@
-httpebpf is a Go library to trace outbound HTTP requests of running Go processes. It attaches Linux eBPF uprobes to `net/http.(*Client).do`.  A subset of the original `http.Request` is returned.
+httpwatcher is a Go library to trace outbound HTTP requests of running Go processes. It attaches Linux eBPF uprobes to `net/http.(*Client).do`.  A subset of the original `http.Request` is returned.
 
 The library and eBPF code are written by Claude Code and Claude Sonnet 4.6.
 
 ## Library usage
 
 ```go
-import "github.com/jamessanford/httpebpf"
+import "github.com/jamessanford/httpwatcher"
 
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 defer stop()
 
-snoop, err := httpebpf.Init(ctx)
+snoop, err := httpwatcher.Init(ctx)
 if err != nil {
     log.Fatal(err)
 }
@@ -37,31 +37,31 @@ for ev := range snoop.Events() {
 
 ## Example command
 
-`example/cmd/httpebpf` is a sample CLI that wraps the library.
+`example/cmd/httpwatcher` is a sample CLI that wraps the library.
 
 ```bash
-go build -o httpebpf ./example/cmd/httpebpf
+go build -o httpwatcher ./example/cmd/httpwatcher
 
 # You may also install it:
-# go install github.com/jamessanford/httpebpf/example/cmd/httpebpf@latest
+# go install github.com/jamessanford/httpwatcher/example/cmd/httpwatcher@latest
 ```
 
 ```bash
 # Find running Go processes
-sudo ./httpebpf
+sudo ./httpwatcher
 
 # Scan running Go processes and trace their HTTP requests
-sudo ./httpebpf --bpf
+sudo ./httpwatcher --bpf
 
 # Trace a specific PID
-sudo ./httpebpf --bpf --pid 1234
+sudo ./httpwatcher --bpf --pid 1234
 ```
 
 ```
 Trace HTTP outgoing requests of running Go processes
 
 Usage:
-  httpebpf [flags] [pid...]
+  httpwatcher [flags] [pid...]
 
 Flags:
       --bpf       Attach eBPF http uprobes
@@ -70,5 +70,5 @@ Flags:
   -s, --sort      Sort output by Go version
       --debug     Log process scans to stderr
       --verbose   Include build settings in JSON
-  -h, --help      help for httpebpf
+  -h, --help      help for httpwatcher
 ```
