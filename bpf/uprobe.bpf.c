@@ -1,3 +1,6 @@
+// go:build ignore
+//  +build ignore
+
 // SPDX-License-Identifier: GPL-2.0
 
 // Uprobe on net/http.(*Client).do
@@ -18,7 +21,7 @@ char LICENSE[] SEC("license") = "GPL";
 #define MAX_STR      64   /* must be power of 2 */
 #define MAX_HEADERS  16   /* must be power of 2 */
 #define MAX_HDR_KEY  64   /* must be power of 2 */
-#define MAX_HDR_VAL  128  /* must be power of 2 */
+#define MAX_HDR_VAL  512  /* must be power of 2 */
 
 // Go 1.24+ Swiss tables: internal/runtime/maps layout constants (amd64).
 //
