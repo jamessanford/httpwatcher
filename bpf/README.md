@@ -3,7 +3,7 @@
 The BPF source is `bpf/uprobe.bpf.c`. For the library, the compiled objects are
 generated via `go generate` which runs bpf2go.  Read on to build or verify manually.
 
-This eBPF code was written by Claude Code and Claude Sonnet 4.6.
+This eBPF code is written by Claude Code and Claude Sonnet 4.6.
 
 ## Build
 

@@ -1,6 +1,6 @@
-`httpsnoop` is a Go library to trace outbound HTTP requests of running Go processes. It attaches Linux eBPF uprobes to `net/http.(*Client).do`.  It captures a subset of the http.Request.
+httpsnoop is a Go library to trace outbound HTTP requests of running Go processes. It attaches Linux eBPF uprobes to `net/http.(*Client).do`.  A subset of the original `http.Request` is returned.
 
-This library and eBPF code was written by Claude Code and Claude Sonnet 4.6.
+The library and eBPF code is written by Claude Code and Claude Sonnet 4.6.
 
 ## Library usage
 
