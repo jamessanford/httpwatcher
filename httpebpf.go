@@ -9,6 +9,7 @@
 //	defer stop()
 //	snoop, err := httpebpf.Init(ctx)
 //	if err != nil { ... }
+//	defer snoop.Close()
 //	if err := snoop.Attach(pid); err != nil { ... }
 //	for ev := range snoop.Events() {
 //	    fmt.Printf("%d %s %s\n", ev.PID, ev.Method, ev.URL)
@@ -45,16 +46,20 @@ type HTTPEvent struct {
 
 // Snooper manages uprobe-based HTTP request interception for multiple processes.
 type Snooper struct {
-	objs   bpf.UprobeHTTPObjects
-	rd     *ringbuf.Reader
-	events chan HTTPEvent
-	links  []link.Link
-	mu     sync.Mutex
+	objs      bpf.UprobeHTTPObjects
+	rd        *ringbuf.Reader
+	events    chan HTTPEvent
+	links     []link.Link
+	mu        sync.Mutex // protects 'links'
+	done      chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 // Init loads the uprobe BPF program and starts the event loop.
-// The returned Snooper delivers events until ctx is cancelled, at which point
-// the Events channel is closed and all uprobe links are released.
+// The returned Snooper delivers events until ctx is cancelled
+// or Close() is called, after which the Events channel is closed
+// and all uprobe links are released.
 func Init(ctx context.Context) (*Snooper, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock rlimit: %w", err)
@@ -75,21 +80,42 @@ func Init(ctx context.Context) (*Snooper, error) {
 		objs:   objs,
 		rd:     rd,
 		events: make(chan HTTPEvent, 64),
+		done:   make(chan struct{}),
 	}
 
 	go func() {
-		<-ctx.Done()
-		_ = rd.Close()
+		select {
+		case <-ctx.Done():
+			s.Close()
+		case <-s.done:
+		}
 	}()
 
-	go s.readLoop()
+	s.wg.Go(s.readLoop)
 	return s, nil
+}
+
+// Close stops the event loop, closes the ring buffer, and releases all uprobe
+// links. It waits for the event loop to exit and the Events channel to be
+// closed before returning. Safe to call multiple times.
+func (s *Snooper) Close() {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		_ = s.rd.Close()
+	})
+	s.wg.Wait()
 }
 
 // Attach installs an HTTP uprobe on the process with the given PID.
 // It reads the binary's build info to verify Go version compatibility and
 // resolve struct field offsets.
 func (s *Snooper) Attach(pid int) error {
+	select {
+	case <-s.done:
+		return fmt.Errorf("pid %d: snooper is closed", pid)
+	default:
+	}
+
 	exePath, err := procExePath(pid)
 	if err != nil {
 		return fmt.Errorf("pid %d: resolve exe path: %w", pid, err)
@@ -144,16 +170,15 @@ func (s *Snooper) Attach(pid int) error {
 }
 
 // Events returns the channel on which captured HTTP events are delivered.
-// The channel is closed when the context passed to Init is cancelled.
+// The channel is closed when the context passed to Init is cancelled or
+// when Close is called.
 func (s *Snooper) Events() <-chan HTTPEvent {
 	return s.events
 }
 
-// TODO: Should we have a "Close" that also cancels it, and then actually waits for readLoop cleanup to finish?
 func (s *Snooper) readLoop() {
 	defer close(s.events)
 	defer s.objs.Close()
-	defer s.rd.Close()
 	defer func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -176,7 +201,11 @@ func (s *Snooper) readLoop() {
 			slog.Info("decode event", "err", err)
 			continue
 		}
-		s.events <- ev
+		select {
+		case s.events <- ev:
+		case <-s.done:
+			return
+		}
 	}
 }
 

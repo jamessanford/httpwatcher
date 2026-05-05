@@ -14,19 +14,20 @@ snoop, err := httpebpf.Init(ctx)
 if err != nil {
     log.Fatal(err)
 }
+defer snoop.Close()
 
 snoop.Attach(pid)
 snoop.Attach(pid2)
 
 for ev := range snoop.Events() {
-    fmt.Printf("%s %s\n", ev.Method, ev.URL)
+    fmt.Printf("%d %s %s\n", ev.PID, ev.Method, ev.URL)
     for k, v := range ev.Headers {
         fmt.Printf("  %s: %s\n", k, v)
     }
 }
 ```
 
-`Events()` returns a channel that is closed when the context is cancelled. Any uprobe links are cleaned up automatically.
+`Events()` returns a channel that is closed when the context is cancelled or Close is called.
 
 ## Requirements
 

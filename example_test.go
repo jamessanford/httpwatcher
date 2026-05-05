@@ -25,6 +25,7 @@ func Example() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer snoop.Close()
 
 	pid := 1234
 	if err := snoop.Attach(pid); err != nil {

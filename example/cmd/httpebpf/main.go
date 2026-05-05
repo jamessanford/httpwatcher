@@ -142,6 +142,7 @@ func run(flags configFlags, args []string) error {
 		if err != nil {
 			return err
 		}
+		defer snoop.Close()
 
 		attached := 0
 		for _, info := range result {
