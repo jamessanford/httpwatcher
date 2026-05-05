@@ -59,33 +59,6 @@ char LICENSE[] SEC("license") = "GPL";
 // Both ctrlEmpty (0x80) and ctrlDeleted (0xFE) have bit 7 set.
 #define CTRL_FULL(c) (!((c) & 0x80))
 
-// read_gostr reads a Go string (ptr+len at addr) into buf[0..max-1] and
-// null-terminates it.  Returns 0 on success, -1 if the string is absent.
-// Strings longer than max-1 bytes are silently truncated.
-// max must be a power of two so the length mask is exact.
-static __always_inline int read_gostr(void *addr, char *buf, __u32 max)
-{
-	__u64 ptr = 0, len = 0;
-	bpf_probe_read_user(&ptr, 8, addr);
-	bpf_probe_read_user(&len, 8, addr + 8);
-	if (!ptr || !len) {
-		buf[0] = '\0';
-		return -1;
-	}
-	// Mask before any bounds check: the compiler must emit the AND instruction
-	// so the BPF verifier on older kernels sees a bounded register.  If we
-	// checked len >= max first, the compiler would prove the AND is a no-op
-	// and optimize it away, leaving an unbounded R2 in the bytecode.
-	__u32 l = (__u32)len & (max - 1);
-	if (!l) {
-		buf[0] = '\0';
-		return -1;
-	}
-	bpf_probe_read_user(buf, l, (void *)ptr);
-	buf[l] = '\0';
-	return 0;
-}
-
 // Go ≤1.23 hmap/bmap layout for map[string][]string (amd64).
 //
 // runtime.hmap:
@@ -417,6 +390,33 @@ static long parse_header_cb(__u32 unused, void *data)
 		struct dir_ctx dctx = { .dir_ptr = dir_ptr };
 		bpf_loop(n_dirs, dir_cb, &dctx, 0);
 	}
+	return 0;
+}
+
+// read_gostr reads a Go string (ptr+len at addr) into buf[0..max-1] and
+// null-terminates it.  Returns 0 on success, -1 if the string is absent.
+// Strings longer than max-1 bytes are silently truncated.
+// max must be a power of two so the length mask is exact.
+static __always_inline int read_gostr(void *addr, char *buf, __u32 max)
+{
+	__u64 ptr = 0, len = 0;
+	bpf_probe_read_user(&ptr, 8, addr);
+	bpf_probe_read_user(&len, 8, addr + 8);
+	if (!ptr || !len) {
+		buf[0] = '\0';
+		return -1;
+	}
+	// Mask before any bounds check: the compiler must emit the AND instruction
+	// so the BPF verifier on older kernels sees a bounded register.  If we
+	// checked len >= max first, the compiler would prove the AND is a no-op
+	// and optimize it away, leaving an unbounded R2 in the bytecode.
+	__u32 l = (__u32)len & (max - 1);
+	if (!l) {
+		buf[0] = '\0';
+		return -1;
+	}
+	bpf_probe_read_user(buf, l, (void *)ptr);
+	buf[l] = '\0';
 	return 0;
 }
 
