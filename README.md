@@ -1,16 +1,16 @@
-httpsnoop is a Go library to trace outbound HTTP requests of running Go processes. It attaches Linux eBPF uprobes to `net/http.(*Client).do`.  A subset of the original `http.Request` is returned.
+httpebpf is a Go library to trace outbound HTTP requests of running Go processes. It attaches Linux eBPF uprobes to `net/http.(*Client).do`.  A subset of the original `http.Request` is returned.
 
 The library and eBPF code is written by Claude Code and Claude Sonnet 4.6.
 
 ## Library usage
 
 ```go
-import "github.com/jamessanford/httpsnoop"
+import "github.com/jamessanford/httpebpf"
 
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 defer stop()
 
-snoop, err := httpsnoop.Init(ctx)
+snoop, err := httpebpf.Init(ctx)
 if err != nil {
     log.Fatal(err)
 }
@@ -36,31 +36,31 @@ for ev := range snoop.Events() {
 
 ## Example command
 
-`example/cmd/httpsnoop` is a sample CLI that wraps the library.
+`example/cmd/httpebpf` is a sample CLI that wraps the library.
 
 ```bash
-go build -o httpsnoop ./example/cmd/httpsnoop
+go build -o httpebpf ./example/cmd/httpebpf
 
 # You may also install it:
-# go install github.com/jamessanford/httpsnoop/example/cmd/httpsnoop@latest
+# go install github.com/jamessanford/httpebpf/example/cmd/httpebpf@latest
 ```
 
 ```bash
 # Find running Go processes
-sudo ./httpsnoop
+sudo ./httpebpf
 
 # Scan running Go processes and trace their HTTP requests
-sudo ./httpsnoop --bpf
+sudo ./httpebpf --bpf
 
 # Trace a specific PID
-sudo ./httpsnoop --bpf --pid 1234
+sudo ./httpebpf --bpf --pid 1234
 ```
 
 ```
 Trace HTTP outgoing requests of running Go processes
 
 Usage:
-  httpsnoop [flags] [pid...]
+  httpebpf [flags] [pid...]
 
 Flags:
       --bpf       Attach eBPF http uprobes
@@ -69,7 +69,7 @@ Flags:
   -s, --sort      Sort output by Go version
       --debug     Log process scans to stderr
       --verbose   Include build settings in JSON
-  -h, --help      help for httpsnoop
+  -h, --help      help for httpebpf
 ```
 
 ## Build

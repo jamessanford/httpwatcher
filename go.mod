@@ -1,4 +1,4 @@
-module github.com/jamessanford/httpsnoop
+module github.com/jamessanford/httpebpf
 
 go 1.25.4
 

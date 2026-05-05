@@ -14,7 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/jamessanford/httpsnoop"
+	"github.com/jamessanford/httpebpf"
 	"github.com/spf13/cobra"
 )
 
@@ -138,7 +138,7 @@ func run(flags configFlags, args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 
-		snoop, err := httpsnoop.Init(ctx)
+		snoop, err := httpebpf.Init(ctx)
 		if err != nil {
 			return err
 		}
@@ -195,7 +195,7 @@ func main() {
 	flags := configFlags{}
 
 	root := &cobra.Command{
-		Use:   "httpsnoop [flags] [pid...]",
+		Use:   "httpebpf [flags] [pid...]",
 		Short: "Trace HTTP outgoing requests of running Go processes",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true

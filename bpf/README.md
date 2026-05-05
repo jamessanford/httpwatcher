@@ -44,9 +44,9 @@ llvm-objdump -d bpf/uprobe.bpf.o
 **Load and verify (runs the BPF verifier; requires root):**
 
 ```bash
-sudo bpftool prog load bpf/uprobe.bpf.o /sys/fs/bpf/httpsnoop_test type uprobe
-sudo bpftool prog show pinned /sys/fs/bpf/httpsnoop_test
-sudo rm /sys/fs/bpf/httpsnoop_test
+sudo bpftool prog load bpf/uprobe.bpf.o /sys/fs/bpf/httpebpf_test type uprobe
+sudo bpftool prog show pinned /sys/fs/bpf/httpebpf_test
+sudo rm /sys/fs/bpf/httpebpf_test
 ```
 
 A successful load means the verifier accepted the program on this kernel.
@@ -64,7 +64,7 @@ needed for them.
 
 ## Struct offset resolution
 
-When httpsnoop's `Attach(pid)` is called, the library reads the target binary's
+When httpebpf's `Attach(pid)` is called, the library reads the target binary's
 DWARF debug info to find the byte offsets of `net/http.Request.{Method,URL,Header}`
 and `net/url.URL.{Scheme,Host,Path,RawQuery}`. These offsets are written into a
 per-PID BPF hash map before the uprobe fires, so the BPF program always has

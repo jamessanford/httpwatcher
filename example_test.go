@@ -1,6 +1,6 @@
 //go:build linux
 
-package httpsnoop_test
+package httpebpf_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/jamessanford/httpsnoop"
+	"github.com/jamessanford/httpebpf"
 )
 
 // Example output for a process making requests:
@@ -21,7 +21,7 @@ func Example() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	snoop, err := httpsnoop.Init(ctx)
+	snoop, err := httpebpf.Init(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}

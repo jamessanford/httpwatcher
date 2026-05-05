@@ -1,4 +1,4 @@
-BINARY      := httpsnoop
+BINARY      := httpebpf
 
 .PHONY: generate build test clean
 
@@ -11,12 +11,12 @@ bpf/.generate.stamp: bpf/uprobe.bpf.c
 generate: bpf/.generate.stamp
 
 build:
-	go build -o $(BINARY) ./example/cmd/httpsnoop
+	go build -o $(BINARY) ./example/cmd/httpebpf
 
 test: build
 	go vet ./...
 	go test ./...
 
 clean:
-	rm -f $(BINARY) ./example/cmd/httpsnoop/$(BINARY)
+	rm -f $(BINARY) ./example/cmd/httpebpf/$(BINARY)
 	rm -f bpf/vmlinux.h bpf/uprobehttp_* bpf/.generate.stamp

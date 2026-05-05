@@ -1,6 +1,6 @@
 //go:build linux
 
-package httpsnoop
+package httpebpf
 
 import (
 	"structs"

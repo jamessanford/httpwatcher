@@ -1,7 +1,7 @@
-### httpsnoop example binary
+### httpebpf example binary
 
-This example `httpsnoop` is a variant of [gover](https://github.com/jamessanford/gover)
-hooked up to the [httpsnoop](https://github.com/jamessanford/httpsnoop) library.
+This example `httpebpf` is a variant of [gover](https://github.com/jamessanford/gover)
+hooked up to the [httpebpf](https://github.com/jamessanford/httpebpf) library.
 
 By default it lists running Go programs.  Add `--bpf` to attach and show outgoing HTTP requests.
 
@@ -9,7 +9,7 @@ By default it lists running Go programs.  Add `--bpf` to attach and show outgoin
 Trace HTTP outgoing requests of running Go processes
 
 Usage:
-  httpsnoop [flags] [pid...]
+  httpebpf [flags] [pid...]
 
 Flags:
       --bpf       Attach eBPF http uprobes
@@ -18,5 +18,5 @@ Flags:
   -s, --sort      Sort output by Go version
       --debug     Log process scans to stderr
       --verbose   Include build settings in JSON
-  -h, --help      help for httpsnoop
+  -h, --help      help for httpebpf
 ```
