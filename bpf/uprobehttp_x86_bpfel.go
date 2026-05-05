@@ -15,13 +15,13 @@ import (
 
 type UprobeHTTPHttpEvent struct {
 	_        structs.HostLayout
+	Pid      uint64
 	Method   [64]int8
 	Scheme   [64]int8
 	Host     [64]int8
 	Path     [64]int8
 	Query    [64]int8
 	Nheaders uint64
-	Pid      uint64
 	Keys     [16][64]int8
 	Vals     [16][512]int8
 }

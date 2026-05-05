@@ -34,13 +34,13 @@ const (
 
 type rawHTTPEvent struct {
 	_        structs.HostLayout
+	PID      uint64
 	Method   [evMaxStr]byte
 	Scheme   [evMaxStr]byte
 	Host     [evMaxStr]byte
 	Path     [evMaxStr]byte
 	Query    [evMaxStr]byte
 	NHeaders uint64
-	PID      uint64
 	Keys     [evMaxHdr][evMaxHdrKey]byte
 	Vals     [evMaxHdr][evMaxHdrVal]byte
 }
