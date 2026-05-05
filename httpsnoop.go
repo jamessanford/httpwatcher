@@ -11,12 +11,11 @@
 //	if err != nil { ... }
 //	if err := snoop.Attach(pid); err != nil { ... }
 //	for ev := range snoop.Events() {
-//          fmt.Printf("%d %s %s\n", ev.PID, ev.Method, ev.URL)
-//          for k, v := range ev.Headers {
-//              fmt.Printf("  %s: %s\n", k, v)
-//          }
+//	    fmt.Printf("%d %s %s\n", ev.PID, ev.Method, ev.URL)
+//	    for k, v := range ev.Headers {
+//	           fmt.Printf("  %s: %s\n", k, v)
+//	       }
 //	}
-//
 package httpsnoop
 
 import (
