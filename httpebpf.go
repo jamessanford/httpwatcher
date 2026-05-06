@@ -25,7 +25,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"go/version"
 	"log/slog"
 	"sync"
 
@@ -127,13 +126,13 @@ func (s *Snooper) Attach(pid int) error {
 	}
 
 	// Go <1.17 uses stack-based ABI; the request pointer is not in BX.
-	if bi.GoVersion != "" && version.Compare(bi.GoVersion, "go1.17") < 0 {
+	if bi.GoVersion != "" && compareGoVersion(bi.GoVersion, "go1.17") < 0 {
 		return fmt.Errorf("pid %d: Go version %s predates register ABI (need >=go1.17)", pid, bi.GoVersion)
 	}
 
 	offs := resolveOffsets(exePath)
 	swissTables := uint64(1)
-	if bi.GoVersion != "" && version.Compare(bi.GoVersion, "go1.24") < 0 {
+	if bi.GoVersion != "" && compareGoVersion(bi.GoVersion, "go1.24") < 0 {
 		swissTables = 0
 	}
 
